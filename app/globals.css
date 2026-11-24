@@ -73,3 +73,8 @@ td, th { padding: .8rem .7rem; border-bottom: 1px solid var(--line); }
 .notice { display: grid; gap: .4rem; font-size: .9rem; }
 @media (min-width: 31rem) { .form-columns, .mapping { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 48rem) { .management { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.portal-nav { display: flex; flex-wrap: wrap; gap: .5rem; }
+.portal-nav button { background: #fff; color: var(--brand); border: 1px solid var(--line); }
+.portal-nav button[aria-pressed="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+.preview-controls { display: grid; gap: .8rem; }
+.preview-controls label { max-width: 28rem; }

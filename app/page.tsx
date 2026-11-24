@@ -114,10 +114,13 @@ const initialData: DashboardData = { clients: [], summaries: [], invoices: [], v
 
 function Dashboard({ role }: { role: Role }) {
   const advisor = role === "advisor";
+  const [preview, setPreview] = useState(false);
+  const [previewClientId, setPreviewClientId] = useState("");
+  const showManagement = advisor && !preview;
   const [month, setMonth] = useState(currentMonth);
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<{ key: string; data: DashboardData; error?: string }>();
-  const requestKey = `${month}:${revision}`;
+  const requestKey = `${month}:${revision}:${preview}:${previewClientId}`;
   const data = result?.key === requestKey ? result.data : initialData;
   const refresh = () => setRevision((value) => value + 1);
 
@@ -147,16 +150,17 @@ function Dashboard({ role }: { role: Role }) {
           const users = group.flatMap((client) => client.user_id ? [client.user_id] : []);
           const [summary, profiles] = await Promise.all([
             db.from("monthly_summaries").select("client_id, sales, purchases, estimated_vat").eq("month", firstDay).in("client_id", ids),
-            advisor && users.length ? db.from("profiles").select("id, last_portal_login_at").in("id", users) : null,
+            showManagement && users.length ? db.from("profiles").select("id, last_portal_login_at").in("id", users) : null,
           ]);
           if (summary.error) throw summary.error;
           if (profiles?.error) throw profiles.error;
           summaries.push(...summary.data);
           for (const profile of profiles?.data ?? []) visits[profile.id] = profile.last_portal_login_at;
         }
-        if (!advisor && clients.length) {
+        const viewedClient = clients.find((client) => client.id === previewClientId) ?? clients[0];
+        if (!showManagement && viewedClient) {
           const response = await db.from("official_invoices").select("id, issued_on, company, direction, amount")
-            .eq("client_id", clients[0].id).gte("issued_on", firstDay).lte("issued_on", lastDay)
+            .eq("client_id", viewedClient.id).gte("issued_on", firstDay).lte("issued_on", lastDay)
             .order("issued_on", { ascending: false }).order("id", { ascending: false }).limit(20);
           if (response.error) throw response.error;
           invoices = response.data;
@@ -168,29 +172,41 @@ function Dashboard({ role }: { role: Role }) {
     }
     void load();
     return () => { active = false; };
-  }, [advisor, month, requestKey]);
+  }, [showManagement, previewClientId, month, requestKey]);
 
   const summaryByClient = new Map(data.summaries.map((summary) => [summary.client_id, summary]));
-  const client = data.clients[0];
+  const client = data.clients.find((entry) => entry.id === previewClientId) ?? data.clients[0];
   const loading = result?.key !== requestKey;
   const error = loading ? undefined : result?.error;
   return <>
+    {advisor && <nav className="portal-nav" aria-label="Panel görünümü">
+      <button type="button" aria-pressed={!preview} onClick={() => setPreview(false)}>Mali müşavir paneli</button>
+      <button type="button" aria-pressed={preview} onClick={() => setPreview(true)}>Mükellef önizlemesi</button>
+    </nav>}
     <div className="page-heading">
-      <div><p className="eyebrow">{advisor ? "MALİ MÜŞAVİR PANELİ" : "MÜKELLEF PORTALI"}</p>
-        <h1>{advisor ? "Mükellef yönetimi" : client?.company ?? "Dönem özeti"}</h1></div>
+      <div><p className="eyebrow">{showManagement ? "MALİ MÜŞAVİR PANELİ" : "MÜKELLEF PORTALI"}</p>
+        <h1>{showManagement ? "Mükellef yönetimi" : client?.company ?? "Dönem özeti"}</h1></div>
       <label className="period"><span><CalendarDays size={16} /> Dönem</span>
         <input type="month" value={month} min="1900-01" max="9999-12" onChange={(event) => {
           if (/^\d{4}-(0[1-9]|1[0-2])$/.test(event.target.value)) setMonth(event.target.value);
         }} />
       </label>
     </div>
-    {advisor && <div className="management"><ClientForm refresh={refresh} /><ImportForm refresh={refresh} /></div>}
+    {advisor && preview && <section className="panel preview-controls">
+      <p className="muted">Mali müşavir hesabıyla mükellefin salt okunur ekranını önizliyorsunuz.</p>
+      {data.clients.length > 0 && <label>Mükellef seçin
+        <select value={client?.id} onChange={(event) => setPreviewClientId(event.target.value)}>
+          {data.clients.map((entry) => <option key={entry.id} value={entry.id}>{entry.company} · {entry.tax_number}</option>)}
+        </select>
+      </label>}
+    </section>}
+    {showManagement && <div className="management"><ClientForm refresh={refresh} /><ImportForm refresh={refresh} /></div>}
     {loading ? <p className="panel" role="status">Dönem verileri yükleniyor…</p> :
       error ? <section className="panel stack">
         <p className="error" role="alert">{error}</p>
         <button onClick={refresh}>Dönem verilerini yeniden yükle</button>
       </section> :
-      advisor ? <section className="panel">
+      showManagement ? <section className="panel">
         <h2><Users size={22} /> Mükellef takibi</h2>
         {data.clients.length ? <div className="table-scroll"><table>
           <thead><tr><th>Firma / VKN</th><th>Telefon</th><th>Son veri güncellemesi</th><th>Tahmini KDV</th><th>Son portal girişi</th></tr></thead>
@@ -204,7 +220,7 @@ function Dashboard({ role }: { role: Role }) {
           })}</tbody>
         </table></div> : <p className="muted">Henüz mükellef eklenmedi.</p>}
       </section> : client ? <ClientOverview client={client} summary={summaryByClient.get(client.id)} invoices={data.invoices} /> :
-      <p className="panel">Hesabınıza henüz bir mükellef kaydı bağlanmamış.</p>}
+      <p className="panel">{advisor ? "Önizleme için mali müşavir panelinden bir mükellef ekleyin." : "Hesabınıza henüz bir mükellef kaydı bağlanmamış."}</p>}
   </>;
 }
 
