@@ -35,6 +35,14 @@ where advisor_id = 'ADVISOR_AUTH_UUID' and tax_number = '0123456789';
 
 Hesap ve rol atamalarını Supabase yöneticisi yapar. Portal, mükellef hesabına bağlı tek firmanın verilerini RLS ile sınırlar. Son portal girişi, mükellefin kimliğiyle açılan portal oturumunda kaydedilir.
 
+## Davetle mükellef kaydı ve veri yönetimi
+
+Supabase SQL Editor'da temel şemanın ardından [portal yönetimi geçişini](supabase/migrations/202611240002_portal_management.sql) uygulayın. Yeni hesap açmak için Supabase Auth e-posta kaydı etkin olmalı ve portal adresi Auth yönlendirme adreslerine eklenmelidir.
+
+Mali müşavir, mükellef tablosundaki **Yönet** düğmesinden firmanın e-posta adresi için 48 saatlik kod üretir. Mükellef, doğrulanmış hesabında vergi numarasını ve davet kodunu girerek kendi firmasına bağlanır. Daveti kabul eden hesap read-only olarak kendi faturalarını görür.
+
+**Yönet** alanında seçili firma ve dönemin faturaları Excel'e indirilebilir. Excel dosyası portalın içe aktarma sütunlarıyla uyumludur. Fatura silmek dönem özetini yeniden hesaplar. Mükellefi silmek firmanın faturalarını, özetlerini ve davetini kaldırır, Auth hesabını korur.
+
 ## Girişte profil erişimi (42501)
 
 Auth oturumu açıldıktan sonra profil sorgusu `42501` döndürürse, Supabase SQL Editor'da önce izinleri kontrol edin:

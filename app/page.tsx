@@ -5,6 +5,8 @@ import { Building2, CalendarDays, FileSpreadsheet, Landmark, LogOut, ReceiptText
 import type { Session } from "@supabase/supabase-js";
 import { type Client, type Summary, type Invoice, type Role, currency, currentMonth, timestamp, vatStatus } from "../lib/portal";
 import { supabase } from "../lib/supabase";
+import { activateClient, ClientActivation, InvitationFields } from "./client-activation";
+import ClientManagement from "./client-management";
 import ClientOverview from "./client-overview";
 import { emptyMapping, fields, type Mapping, readImport, mapInvoices } from "../lib/import";
 
@@ -12,6 +14,8 @@ export default function Portal() {
   const [session, setSession] = useState<Session | null | undefined>();
   const [profile, setProfile] = useState<{ id: string; role: Role | null; error?: string }>();
   const [authError, setAuthError] = useState("");
+  const [registration, setRegistration] = useState(false);
+  const [authNotice, setAuthNotice] = useState("");
   const [profileAttempt, setProfileAttempt] = useState(0);
   const [authBusy, setAuthBusy] = useState(false);
   const loginPending = useRef(false);
@@ -49,23 +53,42 @@ export default function Portal() {
     return () => { active = false; };
   }, [userId, profileAttempt]);
 
+  function reloadProfile() {
+    setProfile(undefined);
+    setProfileAttempt((attempt) => attempt + 1);
+  }
+
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setAuthBusy(true);
     setAuthError("");
+    setAuthNotice("");
     try {
-      const { error } = await supabase!.auth.signInWithPassword({
-        email: String(form.get("email")).trim(),
-        password: String(form.get("password")),
-      });
+      const email = String(form.get("email")).trim();
+      const password = String(form.get("password"));
+      if (registration) {
+        const { data, error } = await supabase!.auth.signUp({
+          email, password, options: { emailRedirectTo: window.location.origin },
+        });
+        if (error) throw error;
+        if (data.session) {
+          await activateClient(form);
+          reloadProfile();
+        } else {
+          setAuthNotice("E-posta adresinizi doğrulayın. Ardından giriş yapıp vergi numaranızı ve davet kodunuzu girin.");
+          setRegistration(false);
+        }
+        return;
+      }
+      const { error } = await supabase!.auth.signInWithPassword({ email, password });
       if (error) {
         setAuthError(error.code === "invalid_credentials" ? "E-posta veya şifre hatalı." :
           error.status && error.status < 500 ? error.message :
           "Kimlik doğrulama tamamlanamadı. Tekrar deneyin veya portal yöneticinize bildirin.");
       }
-    } catch {
-      setAuthError("Kimlik doğrulama servisine ulaşılamadı. Tekrar deneyin.");
+    } catch (error) {
+      setAuthError((error as Error).message || "Kimlik doğrulama servisine ulaşılamadı. Tekrar deneyin.");
     } finally {
       setAuthBusy(false);
     }
@@ -86,27 +109,31 @@ export default function Portal() {
     </div></header>
     <main className={session ? "shell main" : "shell main main-guest"}>
       {authError && <p className="error" role="alert">{authError}</p>}
+      {authNotice && !session && <p className="success" role="status">{authNotice}</p>}
       {!supabase ? <p className="error" role="alert">Supabase bağlantı ayarları eksik veya geçersiz.</p> :
        session === undefined || (session && role === undefined) ? <p role="status">Oturum yükleniyor…</p> :
        !session ? <section className="panel login">
         <div className="login-intro">
           <span className="tile"><ReceiptText size={25} aria-hidden="true" /></span>
-          <h1>Portala giriş</h1>
-          <p>Mali müşavir veya mükellef hesabınızla giriş yapın.</p>
+          <h1>{registration ? "Mükellef kaydı" : "Portala giriş"}</h1>
+          <p>{registration ? "Mali müşavirinizin verdiği bilgilerle firma hesabınızı etkinleştirin." : "Mali müşavir veya mükellef hesabınızla giriş yapın."}</p>
         </div>
         <form onSubmit={signIn} className="stack login-form">
           <label>E-posta<input name="email" type="email" autoComplete="username" required /></label>
-          <label>Şifre<input name="password" type="password" autoComplete="current-password" required /></label>
-          <button disabled={authBusy}>{authBusy ? "Giriş yapılıyor…" : "Giriş yap"}</button>
+          <label>Şifre<input name="password" type="password" autoComplete={registration ? "new-password" : "current-password"} minLength={registration ? 8 : undefined} required /></label>
+          {registration && <InvitationFields />}
+          <button disabled={authBusy}>{authBusy ? "İşleniyor…" : registration ? "Mükellef hesabı oluştur" : "Giriş yap"}</button>
+          <button type="button" className="secondary" disabled={authBusy} onClick={() => {
+            setAuthError("");
+            setAuthNotice("");
+            setRegistration(!registration);
+          }}>{registration ? "Giriş ekranına dön" : "Davet koduyla kayıt ol"}</button>
         </form>
-      </section> : role ? <Dashboard key={userId} role={role} /> :
-      <section className="panel stack">
-        <p className="error" role="alert">{profile?.error ?? "Bu hesaba portal rolü atanmamış. Mali müşavirinizle iletişime geçin."}</p>
-        <button onClick={() => {
-          setProfile(undefined);
-          setProfileAttempt((attempt) => attempt + 1);
-        }}>Profili yeniden yükle</button>
-      </section>}
+      </section> : role ? <Dashboard key={userId} role={role} profileLinked={reloadProfile} /> :
+      profile?.error ? <section className="panel stack">
+        <p className="error" role="alert">{profile.error}</p>
+        <button onClick={reloadProfile}>Profili yeniden yükle</button>
+      </section> : <ClientActivation linked={reloadProfile} />}
     </main>
   </>;
 }
@@ -114,9 +141,10 @@ export default function Portal() {
 type DashboardData = { clients: Client[]; summaries: Summary[]; invoices: Invoice[]; visits: Record<string, string | null> };
 const initialData: DashboardData = { clients: [], summaries: [], invoices: [], visits: {} };
 
-function Dashboard({ role }: { role: Role }) {
+function Dashboard({ role, profileLinked }: { role: Role; profileLinked: () => void }) {
   const advisor = role === "advisor";
   const [preview, setPreview] = useState(false);
+  const [managedId, setManagedId] = useState("");
   const [previewClientId, setPreviewClientId] = useState("");
   const showManagement = advisor && !preview;
   const [month, setMonth] = useState(currentMonth);
@@ -178,6 +206,7 @@ function Dashboard({ role }: { role: Role }) {
 
   const summaryByClient = new Map(data.summaries.map((summary) => [summary.client_id, summary]));
   const client = data.clients.find((entry) => entry.id === previewClientId) ?? data.clients[0];
+  const managedClient = result?.data.clients.find((entry) => entry.id === managedId);
   const loading = result?.key !== requestKey;
   const error = loading ? undefined : result?.error;
   return <>
@@ -211,18 +240,20 @@ function Dashboard({ role }: { role: Role }) {
       showManagement ? <section className="panel">
         <h2><Users size={22} /> Mükellef takibi</h2>
         {data.clients.length ? <div className="table-scroll"><table>
-          <thead><tr><th>Firma / VKN</th><th>Telefon</th><th>Son veri güncellemesi</th><th>Tahmini KDV</th><th>Son portal girişi</th></tr></thead>
+          <thead><tr><th>Firma / VKN</th><th>Telefon</th><th>Son veri güncellemesi</th><th>Tahmini KDV</th><th>Son portal girişi</th><th>İşlemler</th></tr></thead>
           <tbody>{[...data.clients].sort((a, b) => a.company.localeCompare(b.company, "tr")).map((entry) => {
             const vat = summaryByClient.get(entry.id)?.estimated_vat;
             return <tr key={entry.id}><td><strong>{entry.company}</strong><span className="cell-note">{entry.tax_number}</span></td>
               <td>{entry.phone}</td><td>{timestamp(entry.last_data_at)}</td>
               <td>{vat === undefined ? "—" : <span className={vat > 0 ? "due" : vat < 0 ? "credit" : ""}>
                 {currency(Math.abs(vat))}<span className="cell-note">{vatStatus(vat)}</span>
-              </span>}</td><td>{timestamp(entry.user_id ? data.visits[entry.user_id] ?? null : null)}</td></tr>;
+              </span>}</td><td>{timestamp(entry.user_id ? data.visits[entry.user_id] ?? null : null)}</td><td><button type="button" className="secondary" aria-expanded={managedId === entry.id} onClick={() => setManagedId(managedId === entry.id ? "" : entry.id)}>Yönet</button></td></tr>;
           })}</tbody>
         </table></div> : <p className="muted">Henüz mükellef eklenmedi.</p>}
       </section> : client ? <ClientOverview client={client} summary={summaryByClient.get(client.id)} invoices={data.invoices} /> :
-      <p className="panel">{advisor ? "Önizleme için mali müşavir panelinden bir mükellef ekleyin." : "Hesabınıza henüz bir mükellef kaydı bağlanmamış."}</p>}
+      advisor ? <p className="panel">Önizleme için mali müşavir panelinden bir mükellef ekleyin.</p> :
+      <ClientActivation linked={profileLinked} />}
+    {showManagement && managedClient && <ClientManagement key={`${managedClient.id}:${month}`} client={managedClient} month={month} refresh={refresh} />}
   </>;
 }
 

@@ -78,3 +78,6 @@ td, th { padding: .8rem .7rem; border-bottom: 1px solid var(--line); }
 .portal-nav button[aria-pressed="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
 .preview-controls { display: grid; gap: .8rem; }
 .preview-controls label { max-width: 28rem; }
+.activation { width: min(100%, 31rem); }
+.secondary { background: #edf5f5; color: var(--brand); }
+.portal-nav button.danger, .invoice-list button.danger { background: #fff0ec; color: #9c2d19; border-color: #f0c2b8; }
