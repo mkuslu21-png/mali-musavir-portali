@@ -10,6 +10,7 @@ export default function Portal() {
   const [session, setSession] = useState<Session | null | undefined>();
   const [profile, setProfile] = useState<{ id: string; role: Role | null; error?: string }>();
   const [authError, setAuthError] = useState("");
+  const [profileAttempt, setProfileAttempt] = useState(0);
   const [authBusy, setAuthBusy] = useState(false);
   const loginPending = useRef(false);
 
@@ -30,16 +31,21 @@ export default function Portal() {
     async function loadProfile() {
       const { data, error } = await db!.from("profiles").select("role").eq("id", userId!).maybeSingle();
       if (!active) return;
-      if (data?.role === "client" && loginPending.current) {
+      const role = data?.role === "advisor" || data?.role === "client" ? data.role : null;
+      const message = error?.code === "42501"
+        ? "Hesap profilini okumak için gereken veritabanı izni eksik (42501). Portal yöneticinize bildirin."
+        : error ? "Hesap profili yüklenemedi. Tekrar deneyin." : undefined;
+      setProfile({ id: userId!, role, error: message });
+
+      if (role === "client" && loginPending.current) {
         loginPending.current = false;
         const visit = await db!.rpc("record_portal_login");
-        if (active && visit.error) setAuthError("Son giriş zamanı kaydedilemedi. " + visit.error.message);
+        if (active && visit.error) setAuthError("Son portal giriş zamanı kaydedilemedi.");
       }
-      if (active) setProfile({ id: userId!, role: data?.role ?? null, error: error?.message });
     }
     void loadProfile();
     return () => { active = false; };
-  }, [userId]);
+  }, [userId, profileAttempt]);
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -51,7 +57,13 @@ export default function Portal() {
         email: String(form.get("email")).trim(),
         password: String(form.get("password")),
       });
-      if (error) setAuthError(error.code === "invalid_credentials" ? "E-posta veya şifre hatalı." : error.message);
+      if (error) {
+        setAuthError(error.code === "invalid_credentials" ? "E-posta veya şifre hatalı." :
+          error.status && error.status < 500 ? error.message :
+          "Kimlik doğrulama tamamlanamadı. Tekrar deneyin veya portal yöneticinize bildirin.");
+      }
+    } catch {
+      setAuthError("Kimlik doğrulama servisine ulaşılamadı. Tekrar deneyin.");
     } finally {
       setAuthBusy(false);
     }
@@ -86,7 +98,13 @@ export default function Portal() {
           <button disabled={authBusy}>{authBusy ? "Giriş yapılıyor…" : "Giriş yap"}</button>
         </form>
       </section> : role ? <Dashboard key={userId} role={role} /> :
-      <p className="error" role="alert">{profile?.error ?? "Bu hesaba portal rolü atanmamış. Mali müşavirinizle iletişime geçin."}</p>}
+      <section className="panel stack">
+        <p className="error" role="alert">{profile?.error ?? "Bu hesaba portal rolü atanmamış. Mali müşavirinizle iletişime geçin."}</p>
+        <button onClick={() => {
+          setProfile(undefined);
+          setProfileAttempt((attempt) => attempt + 1);
+        }}>Profili yeniden yükle</button>
+      </section>}
     </main>
   </>;
 }
@@ -168,7 +186,10 @@ function Dashboard({ role }: { role: Role }) {
     </div>
     {advisor && <div className="management"><ClientForm refresh={refresh} /><ImportForm refresh={refresh} /></div>}
     {loading ? <p className="panel" role="status">Dönem verileri yükleniyor…</p> :
-      error ? <p className="error" role="alert">{error}</p> :
+      error ? <section className="panel stack">
+        <p className="error" role="alert">{error}</p>
+        <button onClick={refresh}>Dönem verilerini yeniden yükle</button>
+      </section> :
       advisor ? <section className="panel">
         <h2><Users size={22} /> Mükellef takibi</h2>
         {data.clients.length ? <div className="table-scroll"><table>

@@ -35,6 +35,31 @@ where advisor_id = 'ADVISOR_AUTH_UUID' and tax_number = '0123456789';
 
 Hesap ve rol atamalarını Supabase yöneticisi yapar. Portal, mükellef hesabına bağlı tek firmanın verilerini RLS ile sınırlar. Son portal girişi, mükellefin kimliğiyle açılan portal oturumunda kaydedilir.
 
+## Girişte profil erişimi (42501)
+
+Auth oturumu açıldıktan sonra profil sorgusu `42501` döndürürse, Supabase SQL Editor'da önce izinleri kontrol edin:
+
+```sql
+select has_table_privilege('authenticated', 'public.profiles', 'SELECT')
+  as profile_select_allowed;
+```
+
+Veritabanı portalın şemasıyla kurulmuşsa [erişim onarımını](supabase/migrations/202611240001_restore_portal_access.sql) SQL Editor'da çalıştırın. Onarım, portalın RLS politikalarını doğrular ve oturum açmış kullanıcılar için gerekli izinleri geri yükler. Farklı politikalar algılarsa işlemi geri alır. Portal hesabına rol atanması yukarıdaki SQL adımıyla yapılır.
+
+Hata oturum oluşmadan çıkıyorsa önce Supabase Auth ve Postgres loglarına bakın. Giriş isteği sırasında `auth.users` üzerinde çalışan özel bir tetikleyici `profiles` erişim hatası oluşturabilir. İlgili tetikleyiciyi bulmak için:
+
+```sql
+select t.tgname as trigger_name,
+       pg_get_triggerdef(t.oid) as trigger_definition,
+       t.tgfoid::regprocedure as trigger_function,
+       p.prosecdef as security_definer
+from pg_trigger t
+join pg_proc p on p.oid = t.tgfoid
+where t.tgrelid = 'auth.users'::regclass and not t.tgisinternal;
+```
+
+Auth tetikleyicileri API kullanıcı izinlerinden ayrı çalışır. Günlüklerde hata veren tetikleyicinin işlevini ve sahipliğini inceleyin.
+
 ## İçe aktarma
 
 İlk Excel sayfası veya CSV başlık satırı içermelidir. Örnek CSV:
