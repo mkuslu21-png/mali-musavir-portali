@@ -26,8 +26,29 @@ h2 svg { color: var(--brand); flex: none; }
 .eyebrow { color: var(--brand); font-size: .81rem; letter-spacing: .08em; font-weight: 750; margin-bottom: .5rem; }
 .period span { display: flex; align-items: center; gap: .4rem; }
 .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 1rem; padding: clamp(1rem, 3vw, 1.5rem); min-width: 0; }
-.login { max-width: 29rem; width: 100%; margin: clamp(1rem, 6vw, 5rem) auto; display: grid; gap: .9rem; }
-.login form { margin-top: .45rem; }
+.main-guest { width: min(100% - 2rem, 54rem); padding-block: clamp(2rem, 8vw, 6.5rem); }
+.login {
+  display: grid;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  box-shadow: 0 18px 48px #14263a12;
+}
+.login-intro {
+  display: grid;
+  align-content: center;
+  gap: .9rem;
+  padding: clamp(1.35rem, 4.5vw, 2.6rem);
+  background: radial-gradient(ellipse at top right, #216760 0%, transparent 68%), #123b3b;
+  color: #fff;
+}
+.login-intro .tile { background: #def3ed; margin-bottom: .35rem; }
+.login-intro p { max-width: 27ch; color: #daeae8; }
+.login-form { padding: clamp(1.35rem, 4.5vw, 2.6rem); align-content: center; }
+.login-form button { margin-top: .35rem; }
+@media (min-width: 43rem) {
+  .login { grid-template-columns: 1fr 1.12fr; min-height: 21rem; }
+}
 .stack, .management, .cards, .form-columns, .mapping { display: grid; gap: .85rem; }
 .drop { display: grid; justify-items: center; gap: .4rem; padding: 1rem; color: var(--brand); background: #eff8f6; border: 2px dashed #9abbba; overflow-wrap: anywhere; }
 .drop.dragging { background: #d8eee9; border-color: var(--brand); }

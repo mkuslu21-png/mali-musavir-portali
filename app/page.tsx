@@ -70,15 +70,17 @@ export default function Portal() {
       <div className="brand"><span className="brand-icon"><Landmark size={22} /></span><span>Mali Müşavir Portalı</span></div>
       {session && <button className="quiet" onClick={signOut}><LogOut size={17} /> Çıkış</button>}
     </div></header>
-    <main className="shell main">
+    <main className={session ? "shell main" : "shell main main-guest"}>
       {authError && <p className="error" role="alert">{authError}</p>}
       {!supabase ? <p className="error" role="alert">Supabase bağlantı ayarları eksik veya geçersiz.</p> :
        session === undefined || (session && role === undefined) ? <p role="status">Oturum yükleniyor…</p> :
        !session ? <section className="panel login">
-        <span className="tile"><Landmark size={26} /></span>
-        <h1>Portala giriş</h1>
-        <p className="muted">Mali müşavir veya mükellef hesabınızla giriş yapın.</p>
-        <form onSubmit={signIn} className="stack">
+        <div className="login-intro">
+          <span className="tile"><ReceiptText size={25} aria-hidden="true" /></span>
+          <h1>Portala giriş</h1>
+          <p>Mali müşavir veya mükellef hesabınızla giriş yapın.</p>
+        </div>
+        <form onSubmit={signIn} className="stack login-form">
           <label>E-posta<input name="email" type="email" autoComplete="username" required /></label>
           <label>Şifre<input name="password" type="password" autoComplete="current-password" required /></label>
           <button disabled={authBusy}>{authBusy ? "Giriş yapılıyor…" : "Giriş yap"}</button>

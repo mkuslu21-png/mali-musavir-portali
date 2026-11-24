@@ -14,7 +14,18 @@ function projectUrl(value: string | undefined) {
 
 const url = projectUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
 const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
-export const supabase = url && key ? createClient(url, key) : null;
+// Production defaults identify this portal's Supabase project. This publishable
+// key is intended for browsers; database access is enforced by Supabase RLS.
+const productionProject = {
+  url: "https://rmqrjhgutqcqttixyfqs.supabase.co",
+  key: "sb_publishable_auyVpe4BrTcCsYWhiilLXw_ehyN2JsP",
+};
+
+const connection = url && key ? { url, key }
+  : process.env.NODE_ENV === "production" ? productionProject
+  : null;
+
+export const supabase = connection ? createClient(connection.url, connection.key) : null;
 
 export type Role = "advisor" | "client";
 export type Client = {
