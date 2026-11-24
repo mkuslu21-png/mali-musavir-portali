@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+:root { color-scheme: light; --ink: #14263a; --muted: #51657a; --line: #dce5ed; --brand: #00665d; --paper: #fff; }
+body { margin: 0; background: #eef3f7; color: var(--ink); font-family: system-ui, sans-serif; }
+button, input, select { font: inherit; }
+button, input, select { border-radius: .65rem; }
+button { min-height: 2.75rem; padding: .55rem .95rem; background: var(--brand); color: #fff; cursor: pointer; font-weight: 650; }
+button:disabled { opacity: .6; cursor: wait; }
+button:hover:not(:disabled) { filter: brightness(.91); }
+:focus-visible { outline: 3px solid #0e8c7d; outline-offset: 3px; }
+input:not([type=file]), select { min-height: 2.75rem; min-width: 0; width: 100%; border: 1px solid #bdcbd7; background: #fff; padding: .45rem .65rem; color: var(--ink); }
+label { display: grid; gap: .35rem; font-weight: 600; font-size: .9rem; min-width: 0; }
+select { appearance: none; padding-right: 2rem; background-image: linear-gradient(45deg, transparent 50%, #51657a 50%), linear-gradient(135deg, #51657a 50%, transparent 50%); background-position: calc(100% - 15px) center, calc(100% - 10px) center; background-size: 5px 5px; background-repeat: no-repeat; }
+.shell { width: min(100% - 2rem, 71rem); margin-inline: auto; }
+.topbar { background: #10273c; color: #fff; }
+.topbar-content, .brand, .quiet { display: flex; gap: .65rem; align-items: center; }
+.topbar-content { justify-content: space-between; min-height: 4.25rem; }
+.brand { font-weight: 750; }
+.brand-icon, .tile { display: grid; place-items: center; width: 2.55rem; height: 2.55rem; border-radius: .7rem; background: #d9f0eb; color: var(--brand); flex: none; }
+.quiet { background: #24425b; font-size: .88rem; }
+.main { display: grid; gap: 1.25rem; padding-block: 2rem; }
+.page-heading { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 1rem; }
+h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); line-height: 1.12; font-weight: 780; letter-spacing: -.04em; overflow-wrap: anywhere; }
+h2 { display: flex; align-items: center; gap: .65rem; font-size: 1.14rem; font-weight: 730; margin-bottom: 1rem; }
+h2 svg { color: var(--brand); flex: none; }
+.eyebrow { color: var(--brand); font-size: .81rem; letter-spacing: .08em; font-weight: 750; margin-bottom: .5rem; }
+.period span { display: flex; align-items: center; gap: .4rem; }
+.panel { background: var(--paper); border: 1px solid var(--line); border-radius: 1rem; padding: clamp(1rem, 3vw, 1.5rem); min-width: 0; }
+.login { max-width: 29rem; width: 100%; margin: clamp(1rem, 6vw, 5rem) auto; display: grid; gap: .9rem; }
+.login form { margin-top: .45rem; }
+.stack, .management, .cards, .form-columns, .mapping { display: grid; gap: .85rem; }
+.drop { display: grid; justify-items: center; gap: .4rem; padding: 1rem; color: var(--brand); background: #eff8f6; border: 2px dashed #9abbba; overflow-wrap: anywhere; }
+.drop.dragging { background: #d8eee9; border-color: var(--brand); }
+.drop small { color: var(--muted); font-weight: 500; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
+th { background: #f0f5f8; color: #3e5468; }
+td, th { padding: .8rem .7rem; border-bottom: 1px solid var(--line); }
+.cell-note { display: block; color: var(--muted); font-size: .88rem; margin-top: .18rem; }
+.metric { display: grid; align-content: start; gap: .55rem; }
+.metric h2 { margin: .15rem 0 0; font-size: .97rem; }
+.metric strong { font-size: clamp(1.55rem, 4vw, 2.12rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.muted, .notice { color: var(--muted); }
+.due { color: #a13616; }
+.credit { color: #087344; }
+.error, .success { padding: .65rem .85rem; border-radius: .6rem; overflow-wrap: anywhere; }
+.error { background: #fff0ec; color: #9c2d19; }
+.success { background: #e2f5ee; color: #085f47; }
+.invoice-list li { display: flex; justify-content: space-between; gap: .8rem; padding: .85rem 0; border-top: 1px solid var(--line); }
+.invoice-list li > div { min-width: 0; overflow-wrap: anywhere; }
+.invoice-list li > strong { overflow-wrap: anywhere; text-align: right; min-width: 0; }
+.notice { display: grid; gap: .4rem; font-size: .9rem; }
+@media (min-width: 31rem) { .form-columns, .mapping { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 48rem) { .management { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

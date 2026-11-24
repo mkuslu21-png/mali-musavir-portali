@@ -1,0 +1,323 @@
+"use client";
+
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import { Building2, CalendarDays, FileSpreadsheet, FolderOpen, Landmark, LogOut, ReceiptText, TrendingDown, TrendingUp, Users, UploadCloud } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
+import { type Client, type Summary, type Invoice, type Role, supabase, currency, currentMonth, timestamp, vatStatus } from "../lib/portal";
+import { emptyMapping, fields, type Mapping, readImport, mapInvoices } from "../lib/import";
+
+export default function Portal() {
+  const [session, setSession] = useState<Session | null | undefined>();
+  const [profile, setProfile] = useState<{ id: string; role: Role | null; error?: string }>();
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const loginPending = useRef(false);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((event, next) => {
+      if (next && (event === "INITIAL_SESSION" || event === "SIGNED_IN")) loginPending.current = true;
+      setSession(next);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  const userId = session?.user.id;
+  useEffect(() => {
+    const db = supabase;
+    if (!db || !userId) return;
+    let active = true;
+    async function loadProfile() {
+      const { data, error } = await db!.from("profiles").select("role").eq("id", userId!).maybeSingle();
+      if (!active) return;
+      if (data?.role === "client" && loginPending.current) {
+        loginPending.current = false;
+        const visit = await db!.rpc("record_portal_login");
+        if (active && visit.error) setAuthError("Son giriş zamanı kaydedilemedi. " + visit.error.message);
+      }
+      if (active) setProfile({ id: userId!, role: data?.role ?? null, error: error?.message });
+    }
+    void loadProfile();
+    return () => { active = false; };
+  }, [userId]);
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const { error } = await supabase!.auth.signInWithPassword({
+        email: String(form.get("email")).trim(),
+        password: String(form.get("password")),
+      });
+      if (error) setAuthError(error.code === "invalid_credentials" ? "E-posta veya şifre hatalı." : error.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function signOut() {
+    setAuthError("");
+    const { error } = await supabase!.auth.signOut({ scope: "local" });
+    if (error) setAuthError(error.message);
+    else setProfile(undefined);
+  }
+
+  const role = profile?.id === userId ? profile?.role : undefined;
+  return <>
+    <header className="topbar"><div className="shell topbar-content">
+      <div className="brand"><span className="brand-icon"><Landmark size={22} /></span><span>Mali Müşavir Portalı</span></div>
+      {session && <button className="quiet" onClick={signOut}><LogOut size={17} /> Çıkış</button>}
+    </div></header>
+    <main className="shell main">
+      {authError && <p className="error" role="alert">{authError}</p>}
+      {!supabase ? <p className="error" role="alert">Supabase bağlantı ayarları eksik.</p> :
+       session === undefined || (session && role === undefined) ? <p role="status">Oturum yükleniyor…</p> :
+       !session ? <section className="panel login">
+        <span className="tile"><Landmark size={26} /></span>
+        <h1>Portala giriş</h1>
+        <p className="muted">Mali müşavir veya mükellef hesabınızla giriş yapın.</p>
+        <form onSubmit={signIn} className="stack">
+          <label>E-posta<input name="email" type="email" autoComplete="username" required /></label>
+          <label>Şifre<input name="password" type="password" autoComplete="current-password" required /></label>
+          <button disabled={authBusy}>{authBusy ? "Giriş yapılıyor…" : "Giriş yap"}</button>
+        </form>
+      </section> : role ? <Dashboard key={userId} role={role} /> :
+      <p className="error" role="alert">{profile?.error ?? "Bu hesaba portal rolü atanmamış. Mali müşavirinizle iletişime geçin."}</p>}
+    </main>
+  </>;
+}
+
+type DashboardData = { clients: Client[]; summaries: Summary[]; invoices: Invoice[]; visits: Record<string, string | null> };
+const initialData: DashboardData = { clients: [], summaries: [], invoices: [], visits: {} };
+
+function Dashboard({ role }: { role: Role }) {
+  const advisor = role === "advisor";
+  const [month, setMonth] = useState(currentMonth);
+  const [revision, setRevision] = useState(0);
+  const [result, setResult] = useState<{ key: string; data: DashboardData; error?: string }>();
+  const requestKey = `${month}:${revision}`;
+  const data = result?.key === requestKey ? result.data : initialData;
+  const refresh = () => setRevision((value) => value + 1);
+
+  useEffect(() => {
+    const db = supabase!;
+    let active = true;
+    async function load() {
+      try {
+        const clients: Client[] = [];
+        for (let offset = 0; ; offset += 500) {
+          const response = await db.from("clients").select("id, user_id, company, tax_number, phone, last_data_at").order("id").range(offset, offset + 499);
+          if (response.error) throw response.error;
+          clients.push(...response.data);
+          if (response.data.length < 500) break;
+        }
+        const firstDay = `${month}-01`;
+        const nextDate = new Date(`${firstDay}T00:00:00Z`);
+        nextDate.setUTCMonth(nextDate.getUTCMonth() + 1);
+        nextDate.setUTCDate(0);
+        const lastDay = nextDate.toISOString().slice(0, 10);
+        const summaries: Summary[] = [];
+        const visits: DashboardData["visits"] = {};
+        let invoices: Invoice[] = [];
+        for (let offset = 0; offset < clients.length; offset += 100) {
+          const group = clients.slice(offset, offset + 100);
+          const ids = group.map((client) => client.id);
+          const users = group.flatMap((client) => client.user_id ? [client.user_id] : []);
+          const [summary, profiles] = await Promise.all([
+            db.from("monthly_summaries").select("client_id, sales, purchases, estimated_vat").eq("month", firstDay).in("client_id", ids),
+            advisor && users.length ? db.from("profiles").select("id, last_portal_login_at").in("id", users) : null,
+          ]);
+          if (summary.error) throw summary.error;
+          if (profiles?.error) throw profiles.error;
+          summaries.push(...summary.data);
+          for (const profile of profiles?.data ?? []) visits[profile.id] = profile.last_portal_login_at;
+        }
+        if (!advisor && clients.length) {
+          const response = await db.from("official_invoices").select("id, issued_on, company, direction, amount")
+            .eq("client_id", clients[0].id).gte("issued_on", firstDay).lte("issued_on", lastDay)
+            .order("issued_on", { ascending: false }).order("id", { ascending: false }).limit(20);
+          if (response.error) throw response.error;
+          invoices = response.data;
+        }
+        if (active) setResult({ key: requestKey, data: { clients, summaries, visits, invoices } });
+      } catch (error) {
+        if (active) setResult({ key: requestKey, data: initialData, error: (error as Error).message });
+      }
+    }
+    void load();
+    return () => { active = false; };
+  }, [advisor, month, requestKey]);
+
+  const summaryByClient = new Map(data.summaries.map((summary) => [summary.client_id, summary]));
+  const client = data.clients[0];
+  const loading = result?.key !== requestKey;
+  const error = loading ? undefined : result?.error;
+  return <>
+    <div className="page-heading">
+      <div><p className="eyebrow">{advisor ? "MALİ MÜŞAVİR PANELİ" : "MÜKELLEF PORTALI"}</p>
+        <h1>{advisor ? "Mükellef yönetimi" : client?.company ?? "Dönem özeti"}</h1></div>
+      <label className="period"><span><CalendarDays size={16} /> Dönem</span>
+        <input type="month" value={month} min="1900-01" max="9999-12" onChange={(event) => {
+          if (/^\d{4}-(0[1-9]|1[0-2])$/.test(event.target.value)) setMonth(event.target.value);
+        }} />
+      </label>
+    </div>
+    {advisor && <div className="management"><ClientForm refresh={refresh} /><ImportForm refresh={refresh} /></div>}
+    {loading ? <p className="panel" role="status">Dönem verileri yükleniyor…</p> :
+      error ? <p className="error" role="alert">{error}</p> :
+      advisor ? <section className="panel">
+        <h2><Users size={22} /> Mükellef takibi</h2>
+        {data.clients.length ? <div className="table-scroll"><table>
+          <thead><tr><th>Firma / VKN</th><th>Telefon</th><th>Son veri güncellemesi</th><th>Tahmini KDV</th><th>Son portal girişi</th></tr></thead>
+          <tbody>{[...data.clients].sort((a, b) => a.company.localeCompare(b.company, "tr")).map((entry) => {
+            const vat = summaryByClient.get(entry.id)?.estimated_vat;
+            return <tr key={entry.id}><td><strong>{entry.company}</strong><span className="cell-note">{entry.tax_number}</span></td>
+              <td>{entry.phone}</td><td>{timestamp(entry.last_data_at)}</td>
+              <td>{vat === undefined ? "—" : <span className={vat > 0 ? "due" : vat < 0 ? "credit" : ""}>
+                {currency(Math.abs(vat))}<span className="cell-note">{vatStatus(vat)}</span>
+              </span>}</td><td>{timestamp(entry.user_id ? data.visits[entry.user_id] ?? null : null)}</td></tr>;
+          })}</tbody>
+        </table></div> : <p className="muted">Henüz mükellef eklenmedi.</p>}
+      </section> : client ? <ClientOverview client={client} summary={summaryByClient.get(client.id)} invoices={data.invoices} /> :
+      <p className="panel">Hesabınıza henüz bir mükellef kaydı bağlanmamış.</p>}
+  </>;
+}
+
+function ClientForm({ refresh }: { refresh: () => void }) {
+  const [feedback, setFeedback] = useState<{ error: boolean; text: string }>();
+  const [busy, setBusy] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    setBusy(true);
+    try {
+      const { error } = await supabase!.from("clients").insert({
+        company: String(values.get("company")).trim(),
+        tax_number: String(values.get("tax")).trim(),
+        phone: String(values.get("phone")).trim(),
+      });
+      if (error) throw error;
+      form.reset();
+      setFeedback({ error: false, text: "Mükellef eklendi." });
+      refresh();
+    } catch (error) {
+      setFeedback({ error: true, text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="panel"><h2><Building2 size={22} /> Mükellef ekle</h2>
+    <form className="stack" onSubmit={submit}>
+      <label>Firma adı<input name="company" maxLength={200} required /></label>
+      <div className="form-columns"><label>Vergi No / VKN<input name="tax" inputMode="numeric" pattern="[0-9]{10,11}" title="10 haneli VKN veya 11 haneli TCKN" required /></label>
+        <label>Telefon<input type="tel" name="phone" maxLength={32} required /></label></div>
+      <button disabled={busy}>{busy ? "Kaydediliyor…" : "Mükellef ekle"}</button>
+      <Feedback value={feedback} />
+    </form>
+  </section>;
+}
+
+function Feedback({ value }: { value?: { error: boolean; text: string } }) {
+  return value ? <p className={value.error ? "error" : "success"} role={value.error ? "alert" : "status"}>{value.text}</p> : null;
+}
+
+function ImportForm({ refresh }: { refresh: () => void }) {
+  const [parsed, setParsed] = useState<Awaited<ReturnType<typeof readImport>> & { name: string }>();
+  const [mapping, setMapping] = useState<Mapping>(emptyMapping);
+  const [feedback, setFeedback] = useState<{ error: boolean; text: string }>();
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  async function select(file?: File) {
+    if (!file || busy) return;
+    setParsed(undefined);
+    setFeedback(undefined);
+    setBusy(true);
+    try {
+      const data = await readImport(file);
+      setParsed({ ...data, name: file.name });
+      setMapping(data.mapping);
+    } catch (error) {
+      setFeedback({ error: true, text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!parsed || busy) return;
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      const rows = mapInvoices(parsed, mapping);
+      const { data, error } = await supabase!.rpc("import_invoices", { p_filename: parsed.name, p_rows: rows });
+      if (error) throw error;
+      setFeedback({ error: false, text: data ? `${data} fatura aktarıldı, dönem özetleri güncellendi.` : "Bu kayıt grubu daha önce aktarıldı." });
+      setParsed(undefined);
+      refresh();
+    } catch (error) {
+      setFeedback({ error: true, text: (error as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="panel"><h2><FileSpreadsheet size={22} /> Fatura içe aktar</h2>
+    <form className="stack" onSubmit={submit}>
+      <input ref={input} type="file" accept=".xlsx,.csv" hidden disabled={busy} onChange={(event) => {
+        void select(event.target.files?.[0]);
+        event.target.value = "";
+      }} />
+      <button type="button" className={`drop ${dragging ? "dragging" : ""}`} disabled={busy}
+        onClick={() => input.current?.click()}
+        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => { event.preventDefault(); setDragging(false); void select(event.dataTransfer.files[0]); }}>
+        <UploadCloud size={24} /> {busy ? "İşleniyor…" : parsed?.name ?? "Dosya seçin veya buraya sürükleyin"}
+        <small>XLSX veya CSV · en fazla 5 MB</small>
+      </button>
+      {parsed && <>
+        <div className="mapping">{(Object.keys(fields) as (keyof Mapping)[]).map((field) =>
+          <label key={field}>{fields[field]}<select required value={mapping[field]} onChange={(event) => {
+            const value = event.target.value;
+            setMapping((previous) => ({ ...previous, [field]: value }));
+          }}><option value="">Sütun seçin</option>{parsed.headers.map((header, index) =>
+            <option key={index} value={index}>{index + 1}. {header}</option>)}</select></label>)}</div>
+        <button disabled={busy}>{busy ? "Aktarılıyor…" : "Faturaları aktar"}</button>
+      </>}
+      <Feedback value={feedback} />
+    </form>
+  </section>;
+}
+
+function ClientOverview({ client, summary, invoices }: { client: Client; summary?: Summary; invoices: Invoice[] }) {
+  const vat = summary?.estimated_vat;
+  const cards = [
+    { label: "Bu ay satış faturaları toplamı", amount: summary?.sales, Icon: TrendingUp },
+    { label: "Bu ay alış/gider faturaları toplamı", amount: summary?.purchases, Icon: TrendingDown },
+    { label: "Tahmini KDV durumu", amount: vat === undefined ? undefined : Math.abs(vat), Icon: ReceiptText },
+  ];
+  return <>
+    <div className="cards">{cards.map(({ label, amount, Icon }, index) => <section className="panel metric" key={label}>
+      <span className="tile"><Icon size={22} /></span><h2>{label}</h2>
+      <strong className={index === 2 && vat ? (vat > 0 ? "due" : "credit") : ""}>
+        {amount === undefined ? "—" : currency(amount)}
+      </strong>
+      {index === 2 && <span className="muted">{vat === undefined ? "Bu dönemde kayıt yok" : vatStatus(vat)}</span>}
+    </section>)}</div>
+    <section className="panel"><h2><FolderOpen size={22} /> Son faturalar</h2>
+      {invoices.length ? <ul className="invoice-list">{invoices.map((invoice) => <li key={invoice.id}>
+        <div><strong>{invoice.company}</strong><span className="cell-note">
+          {invoice.issued_on.split("-").reverse().join(".")} · {invoice.direction === "sale" ? "Satış" : "Alış"}
+        </span></div><strong>{currency(invoice.amount)}</strong>
+      </li>)}</ul> : <p className="muted">Bu dönemde gösterilecek fatura yok.</p>}
+    </section>
+    <footer className="notice">
+      <p><strong>Mali Müşavir Tarafından Son Güncelleme:</strong> {timestamp(client.last_data_at)}</p>
+      <p>Bu veriler sisteme yüklenen kayıtlara dayalı ön bilgilendirmedir; kesin vergi tutarları resmi beyanname ile netleşir.</p>
+    </footer>
+  </>;
+}
