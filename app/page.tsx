@@ -72,7 +72,7 @@ export default function Portal() {
     </div></header>
     <main className="shell main">
       {authError && <p className="error" role="alert">{authError}</p>}
-      {!supabase ? <p className="error" role="alert">Supabase bağlantı ayarları eksik.</p> :
+      {!supabase ? <p className="error" role="alert">Supabase bağlantı ayarları eksik veya geçersiz.</p> :
        session === undefined || (session && role === undefined) ? <p role="status">Oturum yükleniyor…</p> :
        !session ? <section className="panel login">
         <span className="tile"><Landmark size={26} /></span>

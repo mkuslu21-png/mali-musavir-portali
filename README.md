@@ -14,6 +14,8 @@ npm run dev
 
 `.env.local` mevcutsa kopyalama adımını atlayın. Proje kök URL'sini ve Supabase publishable veya anon anahtarını kullanın. Portal http://localhost:3000 adresinde açılır.
 
+Dağıtım ortamında `NEXT_PUBLIC_SUPABASE_URL` için Supabase'in HTTP(S) proje adresini, `NEXT_PUBLIC_SUPABASE_ANON_KEY` için publishable veya anon anahtarını girin. Next.js bu değerleri derleme sırasında uygulamaya ekler. Değerleri değiştirdikten sonra yeni bir derleme ve dağıtım yapın. URL geçersizse veya bir değer eksikse derleme tamamlanır ve portal giriş ekranında bağlantı ayarı hatası gösterilir.
+
 ## Supabase ve hesaplar
 
 1. Yeni projenin Supabase SQL Editor ekranında [şemayı](supabase/schema.sql) bir kere çalıştırın.

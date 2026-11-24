@@ -1,7 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+function projectUrl(value: string | undefined) {
+  const url = value?.trim();
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+
+  try {
+    const parsed = new URL(url);
+    return parsed.username || parsed.password || parsed.search || parsed.hash ? null : parsed.href;
+  } catch {
+    return null;
+  }
+}
+
+const url = projectUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
 export const supabase = url && key ? createClient(url, key) : null;
 
 export type Role = "advisor" | "client";
