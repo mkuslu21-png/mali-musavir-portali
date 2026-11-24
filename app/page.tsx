@@ -1,7 +1,6 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { Building2, CalendarDays, FileSpreadsheet, Landmark, LogOut, ReceiptText, Users, UploadCloud } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 import { type Client, type Summary, type Invoice, type Role, currency, currentMonth, timestamp, vatStatus } from "../lib/portal";
@@ -99,7 +98,6 @@ export default function Portal() {
           <label>E-posta<input name="email" type="email" autoComplete="username" required /></label>
           <label>Şifre<input name="password" type="password" autoComplete="current-password" required /></label>
           <button disabled={authBusy}>{authBusy ? "Giriş yapılıyor…" : "Giriş yap"}</button>
-          <Link className="text-link" href="/ornek">Örnek mükellef ekranını aç</Link>
         </form>
       </section> : role ? <Dashboard key={userId} role={role} /> :
       <section className="panel stack">

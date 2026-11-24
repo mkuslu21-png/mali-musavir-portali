@@ -78,6 +78,3 @@ td, th { padding: .8rem .7rem; border-bottom: 1px solid var(--line); }
 .portal-nav button[aria-pressed="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
 .preview-controls { display: grid; gap: .8rem; }
 .preview-controls label { max-width: 28rem; }
-.text-link { color: var(--brand); text-align: center; text-decoration: underline; text-underline-offset: .18em; }
-.demo-link { padding: .55rem .85rem; border-radius: .65rem; white-space: nowrap; }
-.demo-note { padding: .7rem .95rem; background: #dff1ed; color: #174b43; border-radius: .65rem; }
