@@ -1,11 +1,15 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Building2, CalendarDays, FileSpreadsheet, Landmark, LogOut, ReceiptText, Users, UploadCloud } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
-import { type Client, type Summary, type Invoice, type Role, currency, currentMonth, timestamp, vatStatus } from "../lib/portal";
+import { type Role, currency, currentMonth, isPortalMonth, timestamp, vatStatus } from "../lib/portal";
+import { loadPeriod, loadRegistry, type PeriodData, type Registry } from "../lib/dashboard";
+import { portalError } from "../lib/portal-error";
+import { clientFieldErrors, emailError, fieldText, invitationError, taxNumberError } from "../lib/validation";
 import { supabase } from "../lib/supabase";
 import { activateClient, ClientActivation, InvitationFields } from "./client-activation";
+import FieldError from "./field-error";
 import ClientManagement from "./client-management";
 import ClientOverview from "./client-overview";
 import { emptyMapping, fields, type Mapping, readImport, mapInvoices } from "../lib/import";
@@ -16,6 +20,7 @@ export default function Portal() {
   const [authError, setAuthError] = useState("");
   const [registration, setRegistration] = useState(false);
   const [authNotice, setAuthNotice] = useState("");
+  const [authFields, setAuthFields] = useState<Record<string, string | undefined>>({});
   const [profileAttempt, setProfileAttempt] = useState(0);
   const [authBusy, setAuthBusy] = useState(false);
   const loginPending = useRef(false);
@@ -34,13 +39,12 @@ export default function Portal() {
     const db = supabase;
     if (!db || !userId) return;
     let active = true;
+    const controller = new AbortController();
     async function loadProfile() {
-      const { data, error } = await db!.from("profiles").select("role").eq("id", userId!).maybeSingle();
+      const { data, error } = await db!.from("profiles").select("role").eq("id", userId!).abortSignal(controller.signal).maybeSingle();
       if (!active) return;
       const role = data?.role === "advisor" || data?.role === "client" ? data.role : null;
-      const message = error?.code === "42501"
-        ? "Hesap profilini okumak için gereken veritabanı izni eksik (42501). Portal yöneticinize bildirin."
-        : error ? "Hesap profili yüklenemedi. Tekrar deneyin." : undefined;
+      const message = error ? portalError(error, "Hesap profili yüklenemedi. Tekrar deneyin.") : undefined;
       setProfile({ id: userId!, role, error: message });
 
       if (role === "client" && loginPending.current) {
@@ -49,8 +53,10 @@ export default function Portal() {
         if (active && visit.error) setAuthError("Son portal giriş zamanı kaydedilemedi.");
       }
     }
-    void loadProfile();
-    return () => { active = false; };
+    void loadProfile().catch((error: unknown) => {
+      if (active) setProfile({ id: userId, role: null, error: portalError(error, "Hesap profili yüklenemedi. Tekrar deneyin.") });
+    });
+    return () => { active = false; controller.abort(); };
   }, [userId, profileAttempt]);
 
   function reloadProfile() {
@@ -61,12 +67,20 @@ export default function Portal() {
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    setAuthBusy(true);
     setAuthError("");
     setAuthNotice("");
+    const email = fieldText(form, "email");
+    const password = String(form.get("password") ?? "");
+    const errors = {
+      email: emailError(email),
+      password: !password ? "Şifrenizi girin." : registration && password.length < 8 ? "En az 8 karakterlik bir şifre seçin." : undefined,
+      tax: registration ? taxNumberError(fieldText(form, "tax")) : undefined,
+      code: registration ? invitationError(fieldText(form, "code")) : undefined,
+    };
+    setAuthFields(errors);
+    if (Object.values(errors).some(Boolean)) return;
+    setAuthBusy(true);
     try {
-      const email = String(form.get("email")).trim();
-      const password = String(form.get("password"));
       if (registration) {
         const { data, error } = await supabase!.auth.signUp({
           email, password, options: { emailRedirectTo: window.location.origin },
@@ -82,13 +96,9 @@ export default function Portal() {
         return;
       }
       const { error } = await supabase!.auth.signInWithPassword({ email, password });
-      if (error) {
-        setAuthError(error.code === "invalid_credentials" ? "E-posta veya şifre hatalı." :
-          error.status && error.status < 500 ? error.message :
-          "Kimlik doğrulama tamamlanamadı. Tekrar deneyin veya portal yöneticinize bildirin.");
-      }
+      if (error) throw error;
     } catch (error) {
-      setAuthError((error as Error).message || "Kimlik doğrulama servisine ulaşılamadı. Tekrar deneyin.");
+      setAuthError(portalError(error, "Kimlik doğrulama tamamlanamadı. Tekrar deneyin veya portal yöneticinize bildirin."));
     } finally {
       setAuthBusy(false);
     }
@@ -96,9 +106,13 @@ export default function Portal() {
 
   async function signOut() {
     setAuthError("");
-    const { error } = await supabase!.auth.signOut({ scope: "local" });
-    if (error) setAuthError(error.message);
-    else setProfile(undefined);
+    try {
+      const { error } = await supabase!.auth.signOut({ scope: "local" });
+      if (error) throw error;
+      setProfile(undefined);
+    } catch (error) {
+      setAuthError(portalError(error, "Çıkış tamamlanamadı. Tekrar deneyin."));
+    }
   }
 
   const role = profile?.id === userId ? profile?.role : undefined;
@@ -118,18 +132,19 @@ export default function Portal() {
           <h1>{registration ? "Mükellef kaydı" : "Portala giriş"}</h1>
           <p>{registration ? "Mali müşavirinizin verdiği bilgilerle firma hesabınızı etkinleştirin." : "Mali müşavir veya mükellef hesabınızla giriş yapın."}</p>
         </div>
-        <form onSubmit={signIn} className="stack login-form">
-          <label>E-posta<input name="email" type="email" autoComplete="username" required /></label>
-          <label>Şifre<input name="password" type="password" autoComplete={registration ? "new-password" : "current-password"} minLength={registration ? 8 : undefined} required /></label>
-          {registration && <InvitationFields />}
+        <form onSubmit={signIn} className="stack login-form" noValidate>
+          <label>E-posta<input name="email" type="email" autoComplete="username" required aria-invalid={!!authFields.email} aria-describedby={authFields.email ? "auth-email-error" : undefined} /><FieldError id="auth-email-error" message={authFields.email} /></label>
+          <label>Şifre<input name="password" type="password" autoComplete={registration ? "new-password" : "current-password"} required aria-invalid={!!authFields.password} aria-describedby={authFields.password ? "auth-password-error" : undefined} /><FieldError id="auth-password-error" message={authFields.password} /></label>
+          {registration && <InvitationFields errors={authFields} />}
           <button disabled={authBusy}>{authBusy ? "İşleniyor…" : registration ? "Mükellef hesabı oluştur" : "Giriş yap"}</button>
           <button type="button" className="secondary" disabled={authBusy} onClick={() => {
             setAuthError("");
             setAuthNotice("");
+            setAuthFields({});
             setRegistration(!registration);
           }}>{registration ? "Giriş ekranına dön" : "Davet koduyla kayıt ol"}</button>
         </form>
-      </section> : role ? <Dashboard key={userId} role={role} profileLinked={reloadProfile} /> :
+      </section> : role ? <Dashboard key={`${userId}:${role}`} actor={userId!} role={role} profileLinked={reloadProfile} /> :
       profile?.error ? <section className="panel stack">
         <p className="error" role="alert">{profile.error}</p>
         <button onClick={reloadProfile}>Profili yeniden yükle</button>
@@ -138,77 +153,64 @@ export default function Portal() {
   </>;
 }
 
-type DashboardData = { clients: Client[]; summaries: Summary[]; invoices: Invoice[]; visits: Record<string, string | null> };
-const initialData: DashboardData = { clients: [], summaries: [], invoices: [], visits: {} };
+const pageSize = 25;
+const emptyPeriod: PeriodData = { summaries: [], invoices: [], visits: {} };
 
-function Dashboard({ role, profileLinked }: { role: Role; profileLinked: () => void }) {
+function Dashboard({ actor, role, profileLinked }: { actor: string; role: Role; profileLinked: () => void }) {
   const advisor = role === "advisor";
   const [preview, setPreview] = useState(false);
   const [managedId, setManagedId] = useState("");
+  const [managementNotice, setManagementNotice] = useState("");
   const [previewClientId, setPreviewClientId] = useState("");
+  const [search, setSearch] = useState("");
+  const [linkFilter, setLinkFilter] = useState<"all" | "linked" | "unlinked">("all");
+  const [page, setPage] = useState(0);
   const showManagement = advisor && !preview;
   const [month, setMonth] = useState(currentMonth);
   const [revision, setRevision] = useState(0);
-  const [result, setResult] = useState<{ key: string; data: DashboardData; error?: string }>();
-  const requestKey = `${month}:${revision}:${preview}:${previewClientId}`;
-  const data = result?.key === requestKey ? result.data : initialData;
+  const [registry, setRegistry] = useState<{ revision: number; data?: Registry; error?: string }>();
+  const [period, setPeriod] = useState<{ key: string; data?: PeriodData; error?: string }>();
   const refresh = () => setRevision((value) => value + 1);
 
   useEffect(() => {
-    const db = supabase!;
-    let active = true;
-    async function load() {
-      try {
-        const clients: Client[] = [];
-        for (let offset = 0; ; offset += 500) {
-          const response = await db.from("clients").select("id, user_id, company, tax_number, phone, last_data_at").order("id").range(offset, offset + 499);
-          if (response.error) throw response.error;
-          clients.push(...response.data);
-          if (response.data.length < 500) break;
-        }
-        const firstDay = `${month}-01`;
-        const nextDate = new Date(`${firstDay}T00:00:00Z`);
-        nextDate.setUTCMonth(nextDate.getUTCMonth() + 1);
-        nextDate.setUTCDate(0);
-        const lastDay = nextDate.toISOString().slice(0, 10);
-        const summaries: Summary[] = [];
-        const visits: DashboardData["visits"] = {};
-        let invoices: Invoice[] = [];
-        for (let offset = 0; offset < clients.length; offset += 100) {
-          const group = clients.slice(offset, offset + 100);
-          const ids = group.map((client) => client.id);
-          const users = group.flatMap((client) => client.user_id ? [client.user_id] : []);
-          const [summary, profiles] = await Promise.all([
-            db.from("monthly_summaries").select("client_id, sales, purchases, estimated_vat").eq("month", firstDay).in("client_id", ids),
-            showManagement && users.length ? db.from("profiles").select("id, last_portal_login_at").in("id", users) : null,
-          ]);
-          if (summary.error) throw summary.error;
-          if (profiles?.error) throw profiles.error;
-          summaries.push(...summary.data);
-          for (const profile of profiles?.data ?? []) visits[profile.id] = profile.last_portal_login_at;
-        }
-        const viewedClient = clients.find((client) => client.id === previewClientId) ?? clients[0];
-        if (!showManagement && viewedClient) {
-          const response = await db.from("official_invoices").select("id, issued_on, company, direction, amount")
-            .eq("client_id", viewedClient.id).gte("issued_on", firstDay).lte("issued_on", lastDay)
-            .order("issued_on", { ascending: false }).order("id", { ascending: false }).limit(20);
-          if (response.error) throw response.error;
-          invoices = response.data;
-        }
-        if (active) setResult({ key: requestKey, data: { clients, summaries, visits, invoices } });
-      } catch (error) {
-        if (active) setResult({ key: requestKey, data: initialData, error: (error as Error).message });
-      }
-    }
-    void load();
-    return () => { active = false; };
-  }, [showManagement, previewClientId, month, requestKey]);
+    const controller = new AbortController();
+    void loadRegistry(actor, role, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setRegistry({ revision, data }); })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setRegistry({ revision, error: portalError(error, "Mükellef listesi yüklenemedi. Tekrar deneyin.") });
+      });
+    return () => controller.abort();
+  }, [actor, role, revision]);
 
+  const registryReady = registry?.revision === revision && Boolean(registry.data);
+  const clients = registry?.data?.clients;
+  const deferredSearch = useDeferredValue(search).trim().toLocaleLowerCase("tr-TR");
+  const matches = useMemo(() => (clients ?? []).filter((client) =>
+    (linkFilter === "all" || Boolean(client.user_id) === (linkFilter === "linked")) &&
+    (client.company.toLocaleLowerCase("tr-TR").includes(deferredSearch) || client.tax_number.includes(deferredSearch)),
+  ).sort((a, b) => a.company.localeCompare(b.company, "tr-TR")), [clients, deferredSearch, linkFilter]);
+  const lastPage = Math.max(0, Math.ceil(matches.length / pageSize) - 1);
+  const currentPage = Math.min(page, lastPage);
+  const visible = useMemo(() => matches.slice(currentPage * pageSize, (currentPage + 1) * pageSize), [matches, currentPage]);
+  const client = clients?.find((entry) => entry.id === previewClientId) ?? clients?.[0];
+  const managedClient = clients?.find((entry) => entry.id === managedId);
+  const periodKey = `${month}:${revision}:${showManagement ? "management" : "overview"}:${showManagement ? visible.map((item) => item.id).join(",") : client?.id ?? ""}`;
+
+  useEffect(() => {
+    if (!registryReady) return;
+    const controller = new AbortController();
+    void loadPeriod(visible, month, client, showManagement, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setPeriod({ key: periodKey, data }); })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setPeriod({ key: periodKey, error: portalError(error, "Dönem verileri yüklenemedi. Tekrar deneyin.") });
+      });
+    return () => controller.abort();
+  }, [client, month, periodKey, registryReady, showManagement, visible]);
+
+  const data = period?.key === periodKey ? period.data ?? emptyPeriod : emptyPeriod;
   const summaryByClient = new Map(data.summaries.map((summary) => [summary.client_id, summary]));
-  const client = data.clients.find((entry) => entry.id === previewClientId) ?? data.clients[0];
-  const managedClient = result?.data.clients.find((entry) => entry.id === managedId);
-  const loading = result?.key !== requestKey;
-  const error = loading ? undefined : result?.error;
+  const error = registry?.revision === revision ? registry.error ?? (period?.key === periodKey ? period.error : undefined) : undefined;
+  const loading = !error && (!registryReady || period?.key !== periodKey);
   return <>
     {advisor && <nav className="portal-nav" aria-label="Panel görünümü">
       <button type="button" aria-pressed={!preview} onClick={() => setPreview(false)}>Mali müşavir paneli</button>
@@ -219,73 +221,102 @@ function Dashboard({ role, profileLinked }: { role: Role; profileLinked: () => v
         <h1>{showManagement ? "Mükellef yönetimi" : client?.company ?? "Dönem özeti"}</h1></div>
       <label className="period"><span><CalendarDays size={16} /> Dönem</span>
         <input type="month" value={month} min="1900-01" max="9999-12" onChange={(event) => {
-          if (/^\d{4}-(0[1-9]|1[0-2])$/.test(event.target.value)) setMonth(event.target.value);
+          if (isPortalMonth(event.target.value)) setMonth(event.target.value);
         }} />
       </label>
     </div>
     {advisor && preview && <section className="panel preview-controls">
       <p className="muted">Mali müşavir hesabıyla mükellefin salt okunur ekranını önizliyorsunuz.</p>
-      {data.clients.length > 0 && <label>Mükellef seçin
+      {clients && clients.length > 0 && <label>Mükellef seçin
         <select value={client?.id} onChange={(event) => setPreviewClientId(event.target.value)}>
-          {data.clients.map((entry) => <option key={entry.id} value={entry.id}>{entry.company} · {entry.tax_number}</option>)}
+          {clients.map((entry) => <option key={entry.id} value={entry.id}>{entry.company} · {entry.tax_number}</option>)}
         </select>
       </label>}
     </section>}
+    {showManagement && managementNotice && <p className="success" role="status">{managementNotice}</p>}
     {showManagement && <div className="management"><ClientForm refresh={refresh} /><ImportForm refresh={refresh} /></div>}
-    {loading ? <p className="panel" role="status">Dönem verileri yükleniyor…</p> :
+    {showManagement && <section className="panel stack">
+      <div className="form-columns">
+        <label>Firma adı veya VKN/TCKN ile ara<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }} /></label>
+        <label>Portal hesabı<select value={linkFilter} onChange={(event) => {
+          const value = event.target.value;
+          if (value === "all" || value === "linked" || value === "unlinked") setLinkFilter(value);
+          setPage(0);
+        }}>
+          <option value="all">Tüm mükellefler</option>
+          <option value="linked">Hesabı bağlı</option>
+          <option value="unlinked">Hesabı bağlı değil</option>
+        </select></label>
+      </div>
+      {(search || linkFilter !== "all") && <button type="button" className="secondary" onClick={() => { setSearch(""); setLinkFilter("all"); setPage(0); }}>Filtreleri temizle</button>}
+    </section>}
+    {loading ? <section className="panel skeleton-panel" role="status" aria-busy="true">
+      <span>Dönem verileri yükleniyor…</span><div aria-hidden="true" /><div aria-hidden="true" /><div aria-hidden="true" />
+    </section> :
       error ? <section className="panel stack">
         <p className="error" role="alert">{error}</p>
         <button onClick={refresh}>Dönem verilerini yeniden yükle</button>
       </section> :
       showManagement ? <section className="panel">
         <h2><Users size={22} /> Mükellef takibi</h2>
-        {data.clients.length ? <div className="table-scroll"><table>
+        {visible.length ? <><div className="table-scroll"><table>
           <thead><tr><th>Firma / VKN</th><th>Telefon</th><th>Son veri güncellemesi</th><th>Tahmini KDV</th><th>Son portal girişi</th><th>İşlemler</th></tr></thead>
-          <tbody>{[...data.clients].sort((a, b) => a.company.localeCompare(b.company, "tr")).map((entry) => {
+          <tbody>{visible.map((entry) => {
             const vat = summaryByClient.get(entry.id)?.estimated_vat;
             return <tr key={entry.id}><td><strong>{entry.company}</strong><span className="cell-note">{entry.tax_number}</span></td>
               <td>{entry.phone}</td><td>{timestamp(entry.last_data_at)}</td>
               <td>{vat === undefined ? "—" : <span className={vat > 0 ? "due" : vat < 0 ? "credit" : ""}>
                 {currency(Math.abs(vat))}<span className="cell-note">{vatStatus(vat)}</span>
-              </span>}</td><td>{timestamp(entry.user_id ? data.visits[entry.user_id] ?? null : null)}</td><td><button type="button" className="secondary" aria-expanded={managedId === entry.id} onClick={() => setManagedId(managedId === entry.id ? "" : entry.id)}>Yönet</button></td></tr>;
+              </span>}</td><td>{timestamp(entry.user_id ? data.visits[entry.user_id] ?? null : null)}</td><td><button type="button" className="secondary" aria-expanded={managedId === entry.id} onClick={() => {
+                setManagementNotice("");
+                setManagedId(managedId === entry.id ? "" : entry.id);
+              }}>Yönet</button></td></tr>;
           })}</tbody>
-        </table></div> : <p className="muted">Henüz mükellef eklenmedi.</p>}
+        </table></div>
+        {lastPage > 0 && <div className="portal-nav pagination">
+          <button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Önceki</button>
+          <span>{currentPage + 1} / {lastPage + 1} · {matches.length} mükellef</span>
+          <button type="button" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)}>Sonraki</button>
+        </div>}</> : <p className="muted">{clients?.length ? "Filtrelere uyan mükellef bulunamadı." : "Henüz mükellef eklenmedi. Başlamak için yukarıdaki formu kullanın."}</p>}
       </section> : client ? <ClientOverview client={client} summary={summaryByClient.get(client.id)} invoices={data.invoices} /> :
       advisor ? <p className="panel">Önizleme için mali müşavir panelinden bir mükellef ekleyin.</p> :
       <ClientActivation linked={profileLinked} />}
-    {showManagement && managedClient && <ClientManagement key={`${managedClient.id}:${month}`} client={managedClient} month={month} refresh={refresh} />}
+    {showManagement && managedClient && !error && <ClientManagement key={`${managedClient.id}:${month}`} client={managedClient} month={month} refresh={refresh}
+      removed={() => { setManagedId(""); setManagementNotice("Mükellef ve bağlı faturalar silindi."); }} />}
   </>;
 }
 
 function ClientForm({ refresh }: { refresh: () => void }) {
   const [feedback, setFeedback] = useState<{ error: boolean; text: string }>();
+  const [fieldErrors, setFieldErrors] = useState<ReturnType<typeof clientFieldErrors>>();
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
+    const entry = { company: fieldText(values, "company"), tax_number: fieldText(values, "tax"), phone: fieldText(values, "phone") };
+    const errors = clientFieldErrors(entry);
+    setFeedback(undefined);
+    setFieldErrors(errors);
+    if (Object.values(errors).some(Boolean)) return;
     setBusy(true);
     try {
-      const { error } = await supabase!.from("clients").insert({
-        company: String(values.get("company")).trim(),
-        tax_number: String(values.get("tax")).trim(),
-        phone: String(values.get("phone")).trim(),
-      });
+      const { error } = await supabase!.from("clients").insert(entry);
       if (error) throw error;
       form.reset();
       setFeedback({ error: false, text: "Mükellef eklendi." });
       refresh();
     } catch (error) {
-      setFeedback({ error: true, text: (error as Error).message });
+      setFeedback({ error: true, text: portalError(error, "Mükellef kaydedilemedi. Tekrar deneyin.") });
     } finally {
       setBusy(false);
     }
   }
   return <section className="panel"><h2><Building2 size={22} /> Mükellef ekle</h2>
-    <form className="stack" onSubmit={submit}>
-      <label>Firma adı<input name="company" maxLength={200} required /></label>
-      <div className="form-columns"><label>Vergi No / VKN<input name="tax" inputMode="numeric" pattern="[0-9]{10,11}" title="10 haneli VKN veya 11 haneli TCKN" required /></label>
-        <label>Telefon<input type="tel" name="phone" maxLength={32} required /></label></div>
+    <form className="stack" onSubmit={submit} noValidate>
+      <label>Firma adı<input name="company" maxLength={200} required aria-invalid={!!fieldErrors?.company} aria-describedby={fieldErrors?.company ? "client-company-error" : undefined} /><FieldError id="client-company-error" message={fieldErrors?.company} /></label>
+      <div className="form-columns"><label>Vergi No / VKN<input name="tax" inputMode="numeric" maxLength={11} required aria-invalid={!!fieldErrors?.tax_number} aria-describedby={fieldErrors?.tax_number ? "client-tax-error" : undefined} /><FieldError id="client-tax-error" message={fieldErrors?.tax_number} /></label>
+        <label>Telefon<input type="tel" name="phone" maxLength={32} required aria-invalid={!!fieldErrors?.phone} aria-describedby={fieldErrors?.phone ? "client-phone-error" : undefined} /><FieldError id="client-phone-error" message={fieldErrors?.phone} /></label></div>
       <button disabled={busy}>{busy ? "Kaydediliyor…" : "Mükellef ekle"}</button>
       <Feedback value={feedback} />
     </form>
@@ -314,7 +345,7 @@ function ImportForm({ refresh }: { refresh: () => void }) {
       setParsed({ ...data, name: file.name });
       setMapping(data.mapping);
     } catch (error) {
-      setFeedback({ error: true, text: (error as Error).message });
+      setFeedback({ error: true, text: portalError(error, "Dosya okunamadı. Geçerli bir CSV veya XLSX dosyası seçin.") });
     } finally {
       setBusy(false);
     }
@@ -332,13 +363,13 @@ function ImportForm({ refresh }: { refresh: () => void }) {
       setParsed(undefined);
       refresh();
     } catch (error) {
-      setFeedback({ error: true, text: (error as Error).message });
+      setFeedback({ error: true, text: portalError(error, "Faturalar aktarılamadı. Dosyayı kontrol edip tekrar deneyin.") });
     } finally {
       setBusy(false);
     }
   }
   return <section className="panel"><h2><FileSpreadsheet size={22} /> Fatura içe aktar</h2>
-    <form className="stack" onSubmit={submit}>
+    <form className="stack" onSubmit={submit} noValidate>
       <input ref={input} type="file" accept=".xlsx,.csv" hidden disabled={busy} onChange={(event) => {
         void select(event.target.files?.[0]);
         event.target.value = "";

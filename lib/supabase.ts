@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import type { Database } from "./database";
 
 function projectUrl(value: string | undefined) {
   const url = value?.trim();
@@ -25,4 +26,4 @@ const connection = url && key ? { url, key }
   : process.env.NODE_ENV === "production" ? productionProject
   : null;
 
-export const supabase = connection ? createClient(connection.url, connection.key) : null;
+export const supabase = connection ? createClient<Database>(connection.url, connection.key) : null;

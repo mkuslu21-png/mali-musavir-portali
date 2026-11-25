@@ -90,3 +90,48 @@ npx tsc --noEmit
 npm run lint
 npm run build
 ```
+
+## Üretim teknik durumu
+
+### Ön yüz
+
+Next.js App Router, React, TypeScript ve Tailwind CSS kullanır. `/` uygulamanın giriş noktasıdır. Oturumu olmayan ziyaretçiye giriş veya davetli kayıt formu gösterilir. Geçerli Auth oturumu olan hesabın portal rolü `profiles` tablosundan yüklenir. `/ornek` ana sayfaya yönlenir.
+
+- **Mali müşavir paneli** dönem seçimi, firma adı ve VKN/TCKN araması, portal hesabı bağlantısı filtresi ve 25 satırlık tablo sayfaları sunar. Mükellef listesi ayrı yüklenir. Dönem değiştiğinde sadece görünür firmaların aylık özetleri ve son giriş bilgileri sorgulanır. Kapsam değiştiğinde eski sorgu iptal edilir. Hata durumunda yeniden deneme kullanılabilir.
+- **Mükellef paneli** seçili dönemdeki satış ve alış toplamlarını, tahmini KDV'yi, son 20 faturayı ve son muhasebeci güncellemesini gösterir. Mali müşavir önizlemesi aynı görünümü kullanır. Firmaya bağlı olmayan mükellef, davetle firma bağlantısı formunu görür.
+- **Veri yönetimi** doğrulanmış e-posta adresine bağlı davet kodu, dönem faturalarının sayfalanması, Excel dışa aktarma ve kalıcı silme öncesi kayıt bazlı onay sunar. Excel dışa aktarma firma ve dönem kapsamındadır. İlk çalışma sayfası yeniden içe aktarmayla uyumludur.
+- **Doğrulama** giriş, kayıt, davet ve mükellef ekleme formlarında alanın yanında Türkçe mesaj gösterir. Veri API'si hataları kullanıcıya çevrilir. İç sorgu ayrıntıları ve ham hata mesajları ekrana veya uygulama konsoluna yazılmaz. İçe aktarma ilk sayfayı okur. 5 MB, 10.000 veri satırı ve 256 sütun sınırı vardır. İlk beş hatalı satır alan bilgisiyle gösterilir. Bir satır bile geçersizse aktarım başlamaz.
+
+### Arka uç ve veri modeli
+
+Vercel Next.js uygulamasını barındırır. Uygulama Supabase Auth ve PostgREST Data API ile çalışır. `lib/database.ts` arayüzün kullandığı tablo, sütun ve RPC sözleşmelerini TypeScript'te tanımlar. `NEXT_PUBLIC_SUPABASE_URL` ve `NEXT_PUBLIC_SUPABASE_ANON_KEY` tarayıcı yapılandırmasıdır. Üretim derlemesinde ortam ayarları eksik veya URL geçersizse mevcut portal projesinin yayınlanabilir anahtarı ve proje adresi kullanılır. Yayınlanabilir anahtarla erişimi kullanıcı JWT'si, PostgreSQL yetkileri ve RLS belirler.
+
+| Nesne | Görevi |
+| --- | --- |
+| `auth.users` | Supabase Auth kimliği ve doğrulanmış e-posta |
+| `profiles` | `advisor` veya `client` rolü ve mükellefin son giriş zamanı |
+| `clients` | Firma, VKN/TCKN, telefon, sorumlu mali müşavir, bağlı Auth hesabı ve son veri güncellemesi |
+| `import_batches` | Yükleme paketi ve aynı satır grubunun tekrar yazılmasını engelleyen parmak izi |
+| `official_invoices` | Tarih, karşı firma, yön, brüt tutar, KDV ve aktarım ilişkisi |
+| `monthly_summaries` | Firma ve ay bazında satış, alış, satış KDV'si, alış KDV'si ve üretilen tahmini KDV farkı |
+| `client_invitations` | Firma başına e-posta, davet kodunun SHA-256 özeti ve son kullanma zamanı |
+
+RLS, danışmanın sahibi olduğu firmalarla mükellefin hesabına bağlanan firmaların erişimini ayırır. Tarayıcıdaki firma sorguları ayrıca oturum kimliğiyle kapsamlanır. Mükellef önizlemesi rol değiştirme veya kimliğe bürünme yapmaz. Anonim kullanıcının finansal tablo erişimi ve davet kabul yetkisi kapalıdır.
+
+`import_invoices` firma eşleşmesi, tekrar kontrolü, fatura yazımı ve dönem hesaplamasını tek işlemde yapar. `create_client_invitation` ve `accept_client_invitation` 48 saatlik tek kullanımlık daveti doğrulanmış e-postayla eşleştirir. `delete_portal_records` sahiplik ve rolü veritabanında doğrular, fatura silinince özeti yeniden hesaplar. Aktarım ve silme aynı mali müşavir profil kilidini kullanır. `record_portal_login` mükellefin kendi giriş zamanını kaydeder. Güvenlik belirleyicisi (`SECURITY DEFINER`) kullanan RPC'ler boş `search_path` ile çalışır ve erişimleri açıkça rol bazında verilir.
+
+### Sürüm öncesi kontrol
+
+- [ ] `npm ci`, `npm test`, `npx tsc --noEmit`, `npm run lint` ve `npm run build` çalıştır.
+- [ ] `npm audit --omit=dev` sonucunu ve Git diff'ini incele. Ortam dosyaları, kullanıcı verisi veya yönetici anahtarı commit'e girmemeli.
+- [ ] Vercel hedef projesini, Supabase proje adresini ve doğru yayınlanabilir anahtarı doğrula. Yönetim geçişinin hedef veritabanında uygulandığını kontrol et.
+- [ ] Önizleme ortamında iki ayrı mali müşavir ve bir mükellefle giriş, filtre, yeniden deneme, davet, içe/dışa aktarma ve silme onayını test et. Diğer firmaların verilerinin görünmediğini doğrula.
+- [ ] Kuruluş dışındaki bir test adresiyle kayıt doğrulama e-postasının ulaştığını ve dönüş bağlantısının portala geldiğini doğrula. SMTP kullanılabilirliğini kontrol et.
+- [ ] GitHub push sonrası Vercel'in doğru commit'i dağıttığını ve üretimde giriş sayfasının açıldığını doğrula.
+
+### Bilinen operasyonel sınırlar
+
+- Kayıt doğrulama e-postasının kuruluş dışına teslimi Supabase SMTP yapılandırmasına bağlıdır. Tarayıcı ve yerel PostgreSQL testleri e-posta teslimini doğrulamaz.
+- Firma dizini sayfalı sorgularla alınır, arama tarayıcıda yapılır. Çok büyük müşteri listelerinde sunucu tarafı arama ve anahtar tabanlı sayfalama ayrı bir performans çalışması gerektirebilir.
+- XLSX tarayıcıda ayrıştırılır. Boyut ve tablo sınırları vardır. Çok sıkıştırılmış veya hasarlı dosyaların açılış süresi tarayıcıya bağlıdır. Aynı dönemde eşzamanlı değişiklik yapılırken birden fazla sorguyla alınan Excel dışa aktarımı tek veritabanı anlık görüntüsü değildir.
+- Silme kalıcıdır. Üretim verisinin geri yüklenebilirliği Supabase yedekleme ayarlarına bağlıdır. KDV, yüklenen satış KDV'si eksi alış KDV'sidir ve resmi beyanname niteliği taşımaz.

@@ -81,3 +81,10 @@ td, th { padding: .8rem .7rem; border-bottom: 1px solid var(--line); }
 .activation { width: min(100%, 31rem); }
 .secondary { background: #edf5f5; color: var(--brand); }
 .portal-nav button.danger, .invoice-list button.danger { background: #fff0ec; color: #9c2d19; border-color: #f0c2b8; }
+.field-error { color: #9c2d19; font-weight: 550; }
+input[aria-invalid="true"] { outline: 1px solid #c9654c; }
+.skeleton-panel { display: grid; gap: .75rem; color: var(--muted); }
+.skeleton-panel div { height: 1.15rem; border-radius: .35rem; background: #e7eef4; }
+.skeleton-panel div:last-child { width: 70%; }
+.pagination { margin-top: 1rem; align-items: center; }
+.error { white-space: pre-line; }

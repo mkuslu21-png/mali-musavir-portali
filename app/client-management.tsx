@@ -1,27 +1,31 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { currency, type Client } from "../lib/portal";
+import { useId, useState, type FormEvent } from "react";
+import { currency, periodBounds, type Client, type Invoice } from "../lib/portal";
+import { portalError } from "../lib/portal-error";
+import { emailError, fieldText } from "../lib/validation";
+import FieldError, { errorAttributes } from "./field-error";
 import { supabase } from "../lib/supabase";
 
 const pageSize = 50;
-type ManagedInvoice = { id: number; issued_on: string; company: string; direction: "sale" | "purchase"; amount: number; vat: number };
+type ManagedInvoice = Invoice & { vat: number };
+type Deletion = { invoice?: ManagedInvoice };
 
 async function invoicePage(client: Client, month: string, offset: number) {
-  const firstDay = `${month}-01`;
-  const next = new Date(`${firstDay}T00:00:00Z`);
-  next.setUTCMonth(next.getUTCMonth() + 1);
-  next.setUTCDate(0);
+  const { firstDay, lastDay } = periodBounds(month);
   const { data, error } = await supabase!.from("official_invoices")
     .select("id, issued_on, company, direction, amount, vat")
-    .eq("client_id", client.id).gte("issued_on", firstDay).lte("issued_on", next.toISOString().slice(0, 10))
+    .eq("client_id", client.id).gte("issued_on", firstDay).lte("issued_on", lastDay)
     .order("issued_on", { ascending: false }).order("id", { ascending: false })
     .range(offset, offset + pageSize - 1);
   if (error) throw error;
-  return data as ManagedInvoice[];
+  return data;
 }
 
-export default function ClientManagement({ client, month, refresh }: { client: Client; month: string; refresh: () => void }) {
+export default function ClientManagement({ client, month, refresh, removed }: { client: Client; month: string; refresh: () => void; removed: () => void }) {
+  const emailId = useId();
+  const [emailFeedback, setEmailFeedback] = useState<string>();
+  const [deletion, setDeletion] = useState<Deletion>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -29,12 +33,12 @@ export default function ClientManagement({ client, month, refresh }: { client: C
   const [invoices, setInvoices] = useState<ManagedInvoice[]>();
   const [offset, setOffset] = useState(0);
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>, fallback = "Faturalar yüklenemedi. Tekrar deneyin.") {
     setBusy(true);
     setError("");
     setNotice("");
     try { await action(); }
-    catch (error) { setError((error as Error).message); }
+    catch (error) { setError(portalError(error, fallback)); }
     finally { setBusy(false); }
   }
 
@@ -46,26 +50,33 @@ export default function ClientManagement({ client, month, refresh }: { client: C
 
   function makeInvite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const values = new FormData(event.currentTarget);
+    const email = fieldText(new FormData(event.currentTarget), "email");
+    const invalid = emailError(email);
+    setEmailFeedback(invalid);
+    if (invalid) return;
     setInvite("");
     void run(async () => {
-      const { data, error } = await supabase!.rpc("create_client_invitation", { p_client: client.id, p_email: values.get("email") });
+      const { data, error } = await supabase!.rpc("create_client_invitation", { p_client: client.id, p_email: email });
       if (error) throw error;
       setInvite(data);
-    });
+    }, "Davet kodu oluşturulamadı. Tekrar deneyin.");
   }
 
-  function remove(invoice?: ManagedInvoice) {
-    const message = invoice
-      ? `${invoice.company} faturası kalıcı olarak silinsin mi?`
-      : `${client.company} ve firmaya ait tüm faturalar kalıcı olarak silinsin mi? Hesabın firma bağlantısı da kalkar.`;
-    if (!window.confirm(message)) return;
+  function confirmRemoval() {
+    if (!deletion) return;
+    const invoice = deletion.invoice;
     void run(async () => {
       const { error } = await supabase!.rpc("delete_portal_records", { p_client: client.id, p_invoice: invoice?.id ?? null });
       if (error) throw error;
+      setDeletion(undefined);
       refresh();
-      if (invoice) await showPage(0);
-    });
+      if (invoice) {
+        setInvoices(undefined);
+        setNotice("Fatura silindi. Güncel listeyi açmak için dönem faturalarını yeniden yükleyin.");
+      } else {
+        removed();
+      }
+    }, "Silme işlemi tamamlanamadı. Tekrar deneyin.");
   }
 
   async function exportInvoices() {
@@ -92,8 +103,8 @@ export default function ClientManagement({ client, month, refresh }: { client: C
   return <section className="panel stack">
     <h2>{client.company} · Veri yönetimi</h2>
     {client.user_id ? <p className="muted">Firma bir mükellef hesabına bağlı.</p> :
-      <form onSubmit={makeInvite} className="stack activation">
-        <label>Mükellefin e-posta adresi<input name="email" type="email" required maxLength={254} /></label>
+      <form onSubmit={makeInvite} className="stack activation" noValidate>
+        <label>Mükellefin e-posta adresi<input name="email" type="email" required maxLength={254} {...errorAttributes(emailId, emailFeedback)} /><FieldError id={emailId} message={emailFeedback} /></label>
         <button disabled={busy}>48 saatlik davet kodu oluştur</button>
       </form>}
     {invite && <div className="success stack" role="status">
@@ -102,20 +113,29 @@ export default function ClientManagement({ client, month, refresh }: { client: C
     </div>}
     <div className="portal-nav">
       <button disabled={busy} onClick={() => void run(() => showPage(0))}>Dönem faturalarını aç</button>
-      <button disabled={busy} onClick={() => void run(exportInvoices)}>Dönemi Excel olarak indir</button>
-      <button className="danger" disabled={busy} onClick={() => remove()}>Mükellefi sil</button>
+      <button disabled={busy} onClick={() => void run(exportInvoices, "Excel dosyası indirilemedi. Tekrar deneyin.")}>Dönemi Excel olarak indir</button>
+      <button className="danger" disabled={busy} onClick={() => setDeletion({})}>Mükellefi sil</button>
     </div>
     {invoices && <>
       {!invoices.length && <p className="muted">Bu sayfada fatura yok.</p>}
       <ul className="invoice-list">{invoices.map((invoice) => <li key={invoice.id}>
         <div><strong>{invoice.company}</strong><span className="cell-note">{invoice.issued_on} · {currency(invoice.amount)}</span></div>
-        <button className="danger" disabled={busy} onClick={() => remove(invoice)}>Faturayı sil</button>
+        <button className="danger" disabled={busy} onClick={() => setDeletion({ invoice })}>Faturayı sil</button>
       </li>)}</ul>
       <div className="portal-nav">
         {offset > 0 && <button disabled={busy} onClick={() => void run(() => showPage(offset - pageSize))}>Önceki</button>}
         {invoices.length === pageSize && <button disabled={busy} onClick={() => void run(() => showPage(offset + pageSize))}>Sonraki</button>}
       </div>
     </>}
+    {deletion && <section className="error stack" aria-label="Silme onayı">
+      <p>{deletion.invoice
+        ? `${deletion.invoice.company} firmasının ${deletion.invoice.issued_on} tarihli ${currency(deletion.invoice.amount)} tutarındaki faturası silinecek.`
+        : `${client.company} ve firmaya ait tüm faturalar kalıcı olarak silinecek. Hesabın firma bağlantısı kalkacak.`}</p>
+      <div className="portal-nav">
+        <button disabled={busy} onClick={() => setDeletion(undefined)}>Vazgeç</button>
+        <button className="danger" disabled={busy} onClick={confirmRemoval}>{busy ? "İşleniyor…" : "Kalıcı olarak sil"}</button>
+      </div>
+    </section>}
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p className="muted" role="status">{notice}</p>}
   </section>;
